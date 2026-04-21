@@ -1,62 +1,182 @@
 # Case Study: Self-Pruning Neural Network via Gated Weight Regularization
 
-## 1. Objective and Methodology
-The objective of this project was to implement a custom neural network layer capable of structural self-pruning during training, evaluated on the CIFAR-10 dataset. 
+---
 
-To achieve this, a standard feed-forward linear layer was augmented with a learnable `gate_scores` parameter. During the forward pass, these raw scores are passed through a Sigmoid activation function to bound them between $0$ and $1$. These bounded values act as differentiable "valves" that are multiplied element-wise with the standard layer weights.
+## 1. Introduction
 
-**The Sparsity Mechanism:**
-If trained purely on Cross-Entropy loss, the network incentivizes keeping all gates near $1.0$ to maximize its parameter capacity. To dynamically induce sparsity, an **L1 norm penalty** is applied to the post-sigmoid gate values. Unlike L2 regularization (which applies diminishing pressure as values approach zero), the L1 penalty applies a constant mathematical pressure. This effectively drives less critical gate values to exactly $0.0$, formally pruning the connection.
+Deep neural networks are often over-parameterized, leading to unnecessary computational cost and redundancy. Traditional pruning methods are typically applied after training and require additional fine-tuning.
+
+This project explores a **self-pruning neural network**, where sparsity is learned dynamically during training using differentiable gating mechanisms. The model automatically identifies and removes less useful connections while preserving predictive performance.
 
 ---
 
-## 2. Engineering Considerations & Training Stability
-Naive implementation of sparsity gating often leads to gradient collapse or "dead" networks, as the L1 penalty overwhelms the model before it can learn meaningful features. To ensure stable training dynamics, two specific engineering adjustments were implemented:
+## 2. Objective
 
-1. **Smart Gate Initialization:** The `gate_scores` were explicitly initialized with a constant of `2.0` (where $Sigmoid(2.0) \approx 0.88$). This ensures the network starts with approximately 88% of its structural capacity active, allowing gradients to flow freely in early training.
-2. **Lambda ($\lambda$) Warm-up Schedule:** A linear warm-up schedule was applied to gradually increase the L1 penalty from $0.0$ to its target value over the first 5 epochs, preventing early-stage instability.
+The objective of this project is to design a neural network that can:
 
----
+- Learn which connections are important
+- Automatically prune unnecessary weights during training
+- Maintain strong performance while reducing model complexity
 
-## 3. Experimental Results
-The network (a 3-layer MLP) was trained on CIFAR-10 across 10 epochs. We compared a baseline dense network against the sparsity-induced model.
-
-*(Note: Sparsity is defined as the percentage of gates with a value $< 1e-2$)*
-
-| Target $\lambda$ (Penalty Rate) | Test Accuracy | Sparsity Level | Observation |
-| :--- | :--- | :--- | :--- |
-| **0.0** (Baseline) | ~Baseline accuracy (see notebook output) | 0.00% | Dense network with full parameter utilization |
-| **1e-4** (Optimal) | ~Comparable to baseline (see notebook output) | High sparsity (see notebook output) | Achieves significant pruning with minimal accuracy loss |
+The model is evaluated on the **CIFAR-10 dataset** using a Multi-Layer Perceptron (MLP).
 
 ---
 
-## 4. Gate Distribution Analysis
-To verify the effect of the L1 penalty on network structure, the distribution of gate values for the optimal model ($\lambda = 1e-4$) was analyzed.
+## 3. Methodology
 
-**Figure 1: Gate value distribution under L1 sparsity constraint**
+### 3.1 Gated Linear Layer
+
+A standard fully connected layer is modified by introducing a learnable parameter called `gate_scores`.
+
+During the forward pass:
+
+- Gate scores are passed through a Sigmoid activation:
+  
+  g = sigmoid(gate_scores)
+
+- These values lie between 0 and 1 and act as soft gates
+
+- The effective weights become:
+
+  W_effective = W ⊙ g
+
+This allows the gating mechanism to be fully differentiable and trainable.
+
+---
+
+### 3.2 Sparsity Mechanism (L1 Regularization)
+
+Without any constraint, the network tends to keep all gates near 1.0.
+
+To enforce sparsity, an L1 penalty is applied:
+
+L_total = L_classification + λ * ||g||₁
+
+#### Why L1?
+
+- L2 regularization shrinks values but rarely reaches zero  
+- L1 regularization pushes values exactly to zero  
+
+This results in true structural pruning.
+
+---
+
+## 4. Engineering Considerations & Training Stability
+
+Applying sparsity naively can destabilize training. Two key strategies were used:
+
+### 4.1 Smart Gate Initialization
+
+- gate_scores initialized to 2.0  
+- sigmoid(2.0) ≈ 0.88  
+
+This ensures most connections start active, allowing proper gradient flow.
+
+---
+
+### 4.2 Lambda (λ) Warm-up
+
+Instead of applying full sparsity from the start:
+
+- λ is gradually increased from 0 to target over first 5 epochs  
+
+This allows the model to first learn features, then prune.
+
+---
+
+## 5. Experimental Setup
+
+- Dataset: CIFAR-10  
+- Model: 3-layer MLP  
+- Training: 10 epochs  
+- Loss: Cross-entropy + L1 sparsity penalty  
+
+**Sparsity Definition:**  
+Percentage of gates with value < 1e-2
+
+---
+
+## 6. Results
+
+| Target λ (Penalty Rate) | Test Accuracy | Sparsity Level | Observation |
+|------------------------|--------------|---------------|------------|
+| 0.0 (Baseline)         | ~Baseline (see notebook) | 0.00% | Fully dense model |
+| 1e-4 (Optimal)         | ~Comparable to baseline | High sparsity | Efficient pruning with minimal accuracy loss |
+
+---
+
+## 7. Gate Distribution Analysis
+
+To understand sparsity behavior, the distribution of gate values is analyzed.
+
+**Figure 1: Gate value distribution under L1 regularization**
 
 ![Gate Distribution](images/gate_distribution.jpeg)
 
-**Observation:**  
-The L1 penalty successfully bifurcates the network. The histogram shows a sharp peak at $0.0$ (representing pruned connections) and a broader distribution near $1.0$, corresponding to important connections retained by the model.
+### Observation
+
+- Strong peak at 0.0 → pruned connections  
+- Distribution near 1.0 → important connections  
+
+This shows clear separation between useful and redundant weights.
 
 ---
 
-## 5. Spatial Interpretability: Feature-Level Pruning
-Since the first `PrunableLinear` layer maps directly to flattened 32×32 CIFAR-10 images, the learned gates can be visualized spatially to understand pruning behavior.
+## 8. Spatial Interpretability
 
-By averaging retained gate values across output features and reshaping into a 32×32 grid (averaged across RGB channels), a spatial pruning heatmap was generated.
+Since the first layer maps directly to image pixels, pruning can be visualized spatially.
 
-**Figure 2: Spatial pruning heatmap of input features**
+### Method:
+- Average gate values across neurons  
+- Reshape into 32×32 grid  
+
+---
+
+**Figure 2: Spatial pruning heatmap**
 
 ![Spatial Heatmap](images/spatial_heatmap.jpeg)
 
-**Observation:**  
-The heatmap shows that the network predominantly prunes the outer edges and corners of the images. This aligns with dataset characteristics, where objects are typically centered, making peripheral pixels less informative for classification.
+### Observation
+
+- Edges and corners are heavily pruned  
+- Central regions are preserved  
+
+This aligns with CIFAR-10 characteristics, where objects are usually centered.
 
 ---
 
-## 6. Conclusion
-This project demonstrates that structured sparsity can be learned dynamically through differentiable gating mechanisms. By combining L1 regularization with careful training strategies (initialization and warm-up), the model achieves significant parameter reduction while maintaining competitive performance.
+## 9. Key Insights
 
-This approach highlights how regularization can be leveraged not only for generalization but also for adaptive architecture optimization in neural networks.
+- Sparsity can be learned during training  
+- L1 regularization enables true pruning  
+- Warm-up strategy stabilizes training  
+- Model learns data-driven pruning patterns  
+
+---
+
+## 10. Conclusion
+
+This project demonstrates that neural networks can dynamically optimize their own structure using differentiable gating mechanisms.
+
+By combining:
+- Learnable gates  
+- L1 regularization  
+- Controlled training strategies  
+
+the model achieves:
+- Significant parameter reduction  
+- Minimal performance drop  
+- Improved interpretability  
+
+This approach highlights the potential for building efficient and adaptive neural networks.
+
+---
+
+## 11. Future Work
+
+- Extend to CNN architectures  
+- Structured pruning (filters/channels)  
+- Hardware-aware optimization  
+- Combine with quantization  
+
+---
